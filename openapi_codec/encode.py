@@ -1,7 +1,8 @@
-import coreschema
 from collections import OrderedDict
 from coreapi.compat import urlparse
-from openapi_codec.utils import get_method, get_encoding, get_location, get_links_from_document
+import coreschema
+
+from openapi_codec.utils import get_encoding, get_links_from_document, get_location, get_method
 
 
 def generate_swagger_object(document):
@@ -110,6 +111,17 @@ def _get_field_description(field):
     return field.schema.description
 
 
+def _get_coreschema_class_name(schema):
+    return {
+        coreschema.String: 'string',
+        coreschema.Integer: 'integer',
+        coreschema.Number: 'number',
+        coreschema.Boolean: 'boolean',
+        coreschema.Array: 'array',
+        coreschema.Object: 'object',
+    }.get(schema.__class__, 'string')
+
+
 def _get_field_type(field):
     if getattr(field, 'type', None) is not None:
         # Deprecated
@@ -118,14 +130,7 @@ def _get_field_type(field):
     if field.schema is None:
         return 'string'
 
-    return {
-        coreschema.String: 'string',
-        coreschema.Integer: 'integer',
-        coreschema.Number: 'number',
-        coreschema.Boolean: 'boolean',
-        coreschema.Array: 'array',
-        coreschema.Object: 'object',
-    }.get(field.schema.__class__, 'string')
+    return _get_coreschema_class_name(field.schema)
 
 
 def _get_parameters(link, encoding):
@@ -163,6 +168,35 @@ def _get_parameters(link, encoding):
                 }
                 if field_type == 'array':
                     schema_property['items'] = {'type': 'string'}
+                if isinstance(field.schema, coreschema.schemas.Enum):
+                    schema_property['enum'] = field.schema.enum
+
+                def get_object_properties(schema):
+                    schema_properties = {}
+                    for k, v in schema.properties.items():
+                        schema_properties.update(
+                            {
+                                k: {'type': 'string', 'description': v.title}
+                            }
+                        )
+
+                    return schema_properties
+
+                if field_type == 'object':
+                    schema_property['properties'] = get_object_properties(field.schema)
+                if field_type == 'array':
+                    try:
+                        sub_doc_schema = field.schema.items
+                        sub_doc_type = _get_coreschema_class_name(sub_doc_schema)
+
+                        schema_property['items'] = {
+                            'type': sub_doc_type,
+                        }
+                        if sub_doc_type == 'object':
+                            schema_property['items']['properties'] = get_object_properties(sub_doc_schema)
+                    except Exception as e:
+                        print(field.name, e)
+
                 properties[field.name] = schema_property
                 if field.required:
                     required.append(field.name)
